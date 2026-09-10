@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Rachana's Bakery — Order</title>
+  <style>
+    body { font-family: -apple-system, sans-serif; background: #fdf6ee; margin: 0; padding: 40px 16px; }
+    .card { max-width: 460px; margin: 0 auto; background: white; border-radius: 12px;
+            padding: 32px; box-shadow: 0 4px 20px rgba(0,0,0,.08); }
+    h1 { margin: 0 0 4px; font-size: 24px; }
+    p.sub { margin: 0 0 24px; color: #8a7a66; }
+    label { display: block; margin: 14px 0 4px; font-weight: 600; font-size: 14px; }
+    input, select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px;
+                    font-size: 15px; box-sizing: border-box; }
+    button { margin-top: 22px; width: 100%; padding: 12px; background: #c05621; color: white;
+             border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; }
+    button:disabled { background: #d9b8a3; }
+    .result { margin-top: 20px; padding: 14px; border-radius: 8px; font-size: 14px; display: none; }
+    .ok { background: #ecf8ef; border: 1px solid #9fd6ab; }
+    .err { background: #fdecec; border: 1px solid #e8a0a0; }
+    .diag { margin-top: 16px; display: none; border: 1px solid #e8dccb; border-radius: 8px; overflow: hidden; }
+    .diag h3 { margin: 0; padding: 10px 14px; font-size: 13px; background: #faf3e8; color: #7a6a55; }
+    .diag table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .diag td { padding: 8px 14px; border-top: 1px solid #f3ece1; }
+    .diag td:last-child { text-align: right; font-family: monospace; }
+    .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+    .badge.cold { background: #dbeafe; color: #1d4ed8; }
+    .badge.warm { background: #fee2c8; color: #b4530a; }
+    .note { padding: 10px 14px; font-size: 12px; color: #8a7a66; background: #fffdf9; border-top: 1px solid #f3ece1; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Rachana's Bakery</h1>
+    <p class="sub">Fresh bakes, powered by DigitalOcean Functions</p>
+
+    <label>Your name</label>
+    <input id="name" placeholder="Your name" />
+
+    <label>Item</label>
+    <select id="item">
+      <option>chocolate cake</option>
+      <option>brownie box</option>
+      <option>cheesecake</option>
+      <option>cookie pack</option>
+    </select>
+
+    <label>Quantity</label>
+    <input id="quantity" type="number" value="1" min="1" max="20" />
+
+    <label>Delivery date</label>
+    <input id="delivery_date" type="date" />
+
+    <button id="submit">Place order</button>
+
+    <div id="result" class="result"></div>
+
+    <div id="diag" class="diag">
+      <h3>Behind the scenes (for the Functions team)</h3>
+      <table id="diagTable"></table>
+      <div class="note" id="diagNote"></div>
+    </div>
+  </div>
+
+  <script>
+    const URL_FN = "https://faas-nyc1-2ef2e6cc.doserverless.co/api/v1/web/fn-7fec4f30-2686-423d-b0ab-f6d1270c9942/orders/create";
+
+    document.getElementById("submit").addEventListener("click", async () => {
+      const btn = document.getElementById("submit");
+      const result = document.getElementById("result");
+      const diag = document.getElementById("diag");
+      const diagTable = document.getElementById("diagTable");
+      const diagNote = document.getElementById("diagNote");
+      btn.disabled = true;
+      btn.textContent = "Placing order…";
+      result.style.display = "none";
+      diag.style.display = "none";
+
+      const payload = {
+        name: document.getElementById("name").value,
+        item: document.getElementById("item").value,
+        quantity: Number(document.getElementById("quantity").value),
+      };
+      const d = document.getElementById("delivery_date").value;
+      if (d) payload.delivery_date = d;
+
+      const t0 = performance.now();
+      try {
+        const res = await fetch(URL_FN, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        const totalMs = Math.round(performance.now() - t0);
+
+        result.style.display = "block";
+        if (res.ok && data.order_id) {
+          result.className = "result ok";
+          result.innerHTML = `<b>${data.message}</b><br>
+            Order ID: <code>${data.order_id}</code><br>
+            ${data.quantity} × ${data.item} — ₹${data.total_rupees}<br>
+            Delivery: ${data.delivery_date}`;
+        } else {
+          result.className = "result err";
+          result.textContent = data.error || "something went wrong";
+        }
+
+        const dg = data._diagnostics;
+        if (dg) {
+          const cold = dg.cold_start;
+          const badge = cold
+            ? '<span class="badge cold">COLD START</span>'
+            : '<span class="badge warm">WARM</span>';
+          // Server-side cold overhead measured via activation records:
+          // ~890ms container provisioning (waitTime) + ~370ms library load (initTime)
+          const serverEst = cold ? 1260 : 40;
+          const networkEst = Math.max(totalMs - serverEst - dg.function_execution_ms, 0);
+
+          diagTable.innerHTML = `
+            <tr><td>This invocation was</td><td>${badge}</td></tr>
+            <tr><td>Total time (your browser)</td><td>${totalMs} ms</td></tr>
+            <tr><td>Function execution (running the code)</td><td>${dg.function_execution_ms} ms</td></tr>
+            <tr><td>Platform overhead — est. (${cold ? "provisioning ~890ms + loading libraries ~370ms" : "warm scheduling"})</td><td>~${serverEst} ms</td></tr>
+            <tr><td>Network + TLS + CORS (your location → nyc1) — est.</td><td>~${networkEst} ms</td></tr>
+            <tr><td>Invocation # in this container</td><td>${dg.invocation_in_this_container}</td></tr>
+            <tr><td>Container alive for</td><td>${dg.container_age_seconds} s</td></tr>`;
+          diagNote.textContent = cold
+            ? "COLD: no container had this function loaded, so the platform built one first (~0.9s) and loaded uuid+dayjs (~0.4s). Click again — the next order reuses this container and skips all of that."
+            : "WARM: the container from a previous order was reused, so only scheduling (~40ms) + execution happened on the platform. Leave it idle ~25 min and the next order will be cold again.";
+          diag.style.display = "block";
+        }
+      } catch (e) {
+        result.style.display = "block";
+        result.className = "result err";
+        result.textContent = "network error: " + e.message;
+      }
+      btn.disabled = false;
+      btn.textContent = "Place order";
+    });
+  </script>
+</body>
+</html>
