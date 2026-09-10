@@ -1,4 +1,8 @@
 import './App.css';
+import { useState } from 'react';
+
+const CHECKOUT_URL =
+  'https://faas-nyc1-2ef2e6cc.doserverless.co/api/v1/web/fn-7fec4f30-2686-423d-b0ab-f6d1270c9942/orders/checkout';
 
 const categories = [
   { id: 1, icon: '🧘', name: 'Yoga Mats', description: 'Non-slip, eco-friendly mats for every practice' },
@@ -110,7 +114,7 @@ function StarRating({ rating }) {
   );
 }
 
-function ProductCard({ product }) {
+function ProductCard({ product, onAdd }) {
   return (
     <div className="product-card">
       {product.tag && <span className="product-tag">{product.tag}</span>}
@@ -122,13 +126,146 @@ function ProductCard({ product }) {
       <span className="review-count">({product.reviews} reviews)</span>
       <div className="product-footer">
         <span className="product-price">${product.price}</span>
-        <button className="add-btn">Add to Cart</button>
+        <button className="add-btn" onClick={() => onAdd(product.id)}>Add to Cart</button>
+      </div>
+    </div>
+  );
+}
+
+function CartDrawer({ cart, onClose, onSetQty, onRemove, onOrdered }) {
+  const [name, setName] = useState('');
+  const [placing, setPlacing] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const entries = Object.entries(cart).map(([id, qty]) => {
+    const product = products.find((p) => p.id === Number(id));
+    return { ...product, quantity: qty };
+  });
+  const total = entries.reduce((sum, e) => sum + e.price * e.quantity, 0);
+
+  const placeOrder = async () => {
+    setPlacing(true);
+    setResult(null);
+    const t0 = performance.now();
+    try {
+      const res = await fetch(CHECKOUT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          cart: entries.map((e) => ({ id: e.id, quantity: e.quantity })),
+        }),
+      });
+      const data = await res.json();
+      const ms = Math.round(performance.now() - t0);
+      if (res.ok && data.order_id) {
+        setResult({ ok: true, data, ms });
+        onOrdered();
+      } else {
+        setResult({ ok: false, error: data.error || 'something went wrong', ms, data });
+      }
+    } catch (e) {
+      setResult({ ok: false, error: 'network error: ' + e.message });
+    }
+    setPlacing(false);
+  };
+
+  return (
+    <div className="cart-overlay" onClick={onClose}>
+      <div className="cart-drawer" onClick={(e) => e.stopPropagation()}>
+        <div className="cart-head">
+          <h2>🛒 Your Cart</h2>
+          <button className="cart-close" onClick={onClose}>✕</button>
+        </div>
+
+        {result && result.ok ? (
+          <div className="order-done">
+            <h3>🌸 {result.data.message}</h3>
+            <p className="order-id">Order ID: <code>{result.data.order_id}</code></p>
+            <ul>
+              {result.data.items.map((l) => (
+                <li key={l.id}>{l.quantity} × {l.name} — ${l.line_total}</li>
+              ))}
+            </ul>
+            <p className="order-total">Total: <b>${result.data.total_usd}</b></p>
+            {result.data._diagnostics && (
+              <p className="fn-diag">
+                Served by a DigitalOcean Function in {result.ms} ms —{' '}
+                {result.data._diagnostics.cold_start
+                  ? '❄️ cold start (a fresh container was booted for this order)'
+                  : `🔥 warm (container reused, invocation #${result.data._diagnostics.invocation_in_this_container})`}
+              </p>
+            )}
+          </div>
+        ) : entries.length === 0 ? (
+          <p className="cart-empty">Your cart is empty. Add something peaceful ✨</p>
+        ) : (
+          <>
+            <div className="cart-items">
+              {entries.map((e) => (
+                <div className="cart-item" key={e.id}>
+                  <span className="cart-item-emoji">{e.emoji}</span>
+                  <div className="cart-item-info">
+                    <div className="cart-item-name">{e.name}</div>
+                    <div className="cart-item-price">${e.price} each</div>
+                  </div>
+                  <div className="cart-qty">
+                    <button onClick={() => onSetQty(e.id, e.quantity - 1)}>−</button>
+                    <span>{e.quantity}</span>
+                    <button onClick={() => onSetQty(e.id, e.quantity + 1)}>+</button>
+                  </div>
+                  <span className="cart-line-total">${e.price * e.quantity}</span>
+                  <button className="cart-remove" onClick={() => onRemove(e.id)}>🗑</button>
+                </div>
+              ))}
+            </div>
+
+            <div className="cart-total-row">
+              <span>Total</span>
+              <b>${total}</b>
+            </div>
+
+            <input
+              className="cart-name"
+              placeholder="Your name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <button
+              className="cart-checkout"
+              disabled={placing || !name}
+              onClick={placeOrder}
+            >
+              {placing ? 'Placing order…' : 'Place order'}
+            </button>
+            {result && !result.ok && <p className="cart-error">{result.error}</p>}
+          </>
+        )}
       </div>
     </div>
   );
 }
 
 function App() {
+  const [cart, setCart] = useState({});
+  const [cartOpen, setCartOpen] = useState(false);
+
+  const cartCount = Object.values(cart).reduce((a, b) => a + b, 0);
+
+  const addToCart = (id) => {
+    setCart((c) => ({ ...c, [id]: (c[id] || 0) + 1 }));
+    setCartOpen(true);
+  };
+  const setQty = (id, qty) => {
+    setCart((c) => {
+      const next = { ...c };
+      if (qty < 1) delete next[id];
+      else next[id] = Math.min(qty, 20);
+      return next;
+    });
+  };
+  const removeItem = (id) => setQty(id, 0);
+
   return (
     <div className="app">
       {/* Header */}
@@ -140,7 +277,9 @@ function App() {
             <a href="#products">Products</a>
             <a href="#about">About</a>
           </nav>
-          <button className="cart-btn">🛒 Cart</button>
+          <button className="cart-btn" onClick={() => setCartOpen(true)}>
+            🛒 Cart{cartCount > 0 ? ` (${cartCount})` : ''}
+          </button>
         </div>
       </header>
 
@@ -184,7 +323,7 @@ function App() {
         <h2 className="section-title">Featured Products</h2>
         <div className="products-grid">
           {products.map((product) => (
-            <ProductCard key={product.id} product={product} />
+            <ProductCard key={product.id} product={product} onAdd={addToCart} />
           ))}
         </div>
       </section>
@@ -211,6 +350,16 @@ function App() {
         <p>🌸 ZenFlow — Yoga Essentials & Accessories for Peace and Healing</p>
         <p className="footer-sub">© 2026 ZenFlow. Made with love and intention.</p>
       </footer>
+
+      {cartOpen && (
+        <CartDrawer
+          cart={cart}
+          onClose={() => setCartOpen(false)}
+          onSetQty={setQty}
+          onRemove={removeItem}
+          onOrdered={() => setCart({})}
+        />
+      )}
     </div>
   );
 }
